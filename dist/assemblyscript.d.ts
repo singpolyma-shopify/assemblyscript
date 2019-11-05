@@ -2574,28 +2574,38 @@ declare module "assemblyscript/src/flow" {
         NONE = 0,
         /** Local is constant. */
         CONSTANT = 1,
+        /** Local is a function parameter. */
+        PARAMETER = 2,
         /** Local is properly wrapped. Relevant for small integers. */
-        WRAPPED = 2,
+        WRAPPED = 4,
         /** Local is non-null. */
-        NONNULL = 4,
+        NONNULL = 8,
         /** Local is read from. */
-        READFROM = 8,
+        READFROM = 16,
         /** Local is written to. */
-        WRITTENTO = 16,
+        WRITTENTO = 32,
         /** Local is retained. */
-        RETAINED = 32,
+        RETAINED = 64,
+        /** Local is returned. */
+        RETURNED = 128,
         /** Local is conditionally read from. */
-        CONDITIONALLY_READFROM = 64,
+        CONDITIONALLY_READFROM = 256,
         /** Local is conditionally written to. */
-        CONDITIONALLY_WRITTENTO = 128,
+        CONDITIONALLY_WRITTENTO = 512,
         /** Local must be conditionally retained. */
-        CONDITIONALLY_RETAINED = 256,
+        CONDITIONALLY_RETAINED = 1024,
+        /** Local is conditionally returned. */
+        CONDITIONALLY_RETURNED = 2048,
         /** Any categorical flag. */
-        ANY_CATEGORICAL = 63,
+        ANY_CATEGORICAL = 255,
         /** Any conditional flag. */
-        ANY_CONDITIONAL = 480,
+        ANY_CONDITIONAL = 3904,
+        /** Any written to flag. */
+        ANY_WRITTENTO = 544,
         /** Any retained flag. */
-        ANY_RETAINED = 288
+        ANY_RETAINED = 1088,
+        /** Any returned flag. */
+        ANY_RETURNED = 2176
     }
     export namespace LocalFlags {
         function join(left: LocalFlags, right: LocalFlags): LocalFlags;
@@ -2673,6 +2683,8 @@ declare module "assemblyscript/src/flow" {
         addScopedLocal(name: string, type: Type, except?: Set<number> | null): Local;
         /** Adds a new scoped alias for the specified local. For example `super` aliased to the `this` local. */
         addScopedAlias(name: string, type: Type, index: number, reportNode?: Node | null): Local;
+        /** Tests if this flow has any scoped locals that must be free'd. */
+        readonly hasScopedLocals: boolean;
         /** Frees this flow's scoped variables and returns its parent flow. */
         freeScopedLocals(): void;
         /** Looks up the local of the specified name in the current scope. */
@@ -2697,6 +2709,8 @@ declare module "assemblyscript/src/flow" {
         inheritConditional(other: Flow): void;
         /** Inherits mutual flags and local wrap states from the specified flows (e.g. then with else). */
         inheritMutual(left: Flow, right: Flow): void;
+        /** Unifies local flags between this and the other flow. */
+        unifyLocalFlags(other: Flow): void;
         /** Checks if an expression of the specified type is known to be non-null, even if the type might be nullable. */
         isNonnull(expr: ExpressionRef, type: Type): boolean;
         /** Updates local states to reflect that this branch is only taken when `expr` is true-ish. */
@@ -2722,7 +2736,7 @@ declare module "assemblyscript/src/resolver" {
     import { DiagnosticEmitter } from "assemblyscript/src/diagnostics";
     import { Program, Element, Class, ClassPrototype, Function, FunctionPrototype } from "assemblyscript/src/program";
     import { Flow } from "assemblyscript/src/flow";
-    import { TypeNode, TypeName, TypeParameterNode, Node, IdentifierExpression, Expression } from "assemblyscript/src/ast";
+    import { TypeNode, TypeName, TypeParameterNode, Node, IdentifierExpression, CallExpression, Expression } from "assemblyscript/src/ast";
     import { Type } from "assemblyscript/src/types";
     /** Indicates whether errors are reported or not. */
     export enum ReportMode {
@@ -2783,18 +2797,8 @@ declare module "assemblyscript/src/resolver" {
         alternativeReportNode?: Node | null, 
         /** How to proceed with eventual diagnostics. */
         reportMode?: ReportMode): Type[] | null;
-        /** Infers the generic type(s) of an argument expression and updates `ctxTypes`. */
-        inferGenericType(
-        /** The generic type being inferred. */
-        typeNode: TypeNode, 
-        /** The respective argument expression. */
-        exprNode: Expression, 
-        /** Contextual flow. */
-        ctxFlow: Flow, 
-        /** Contextual types, i.e. `T`, with unknown types initialized to `auto`. */
-        ctxTypes: Map<string, Type>, 
-        /** The names of the type parameters being inferred. */
-        typeParameterNames: Set<string>): void;
+        /** Resolves respectively infers the concrete instance of a function by call context. */
+        maybeInferCall(node: CallExpression, prototype: FunctionPrototype, ctxFlow: Flow, reportMode?: ReportMode): Function | null;
         /** Updates contextual types with a possibly encapsulated inferred type. */
         private propagateInferredGenericTypes;
         /** Gets the concrete type of an element. */
@@ -3957,8 +3961,8 @@ declare module "assemblyscript/src/compiler" {
         currentFlow: Flow;
         /** Current inline functions stack. */
         currentInlineFunctions: Function[];
-        /** Current enum in compilation. */
-        currentEnum: Enum | null;
+        /** Current parent element if not a function, i.e. an enum or namespace. */
+        currentParent: Element | null;
         /** Current type in compilation. */
         currentType: Type;
         /** Start function statements. */
@@ -4708,7 +4712,8 @@ declare module "assemblyscript/src/definitions" {
      */ /***/
     import { Program, Element, Global, Enum, Field, Function, Class, Namespace, Interface, File } from "assemblyscript/src/program";
     import { Type } from "assemblyscript/src/types";
-    abstract class ExportsWalker {
+    /** Walker base class. */
+    export abstract class ExportsWalker {
         /** Program reference. */
         program: Program;
         /** Whether to include private members */
@@ -4774,7 +4779,6 @@ declare module "assemblyscript/src/definitions" {
         typeToString(type: Type): string;
         build(): string;
     }
-    export {};
 }
 declare module "assemblyscript/src/parser" {
     /**
